@@ -1,53 +1,66 @@
-# Foodiecare
+# FoodieCare
 
-A web-based mobile app for food management and care.
+FoodieCare is a final year BCA project built with Next.js 14.
+It simulates AI-based food recognition and provides nutrition analysis with personalized diet tips.
+
+## Tech Stack
+
+- Next.js 14 (App Router)
+- React (JSX)
+- Tailwind CSS
+- Next.js API Routes
+- Local JSON nutrition database
 
 ## Features
 
-- User authentication
-- Meal planning
-- Recipe suggestions
-- Grocery tracking
-- Nutrition analysis
+- Upload a food image (demo upload)
+- Enter food name for mock AI recognition
+- Nutrition analysis from local data
+- Personalized recommendation rules
+- Mobile-responsive modern healthcare UI
 
-## Installation
+## Supported Foods
 
-1. Clone the repository:
-    ```bash
-    git clone https://github.com/yourusername/foodiecare.git
-    ```
-2. Install dependencies:
-    ```bash
-    npm install
-    ```
-3. Start the development server:
-    ```bash
-    npm start
-    ```
+- pizza
+- burger
+- apple
+- salad
+- rice
+- pasta
+- sandwich
 
-## Usage
+## Getting Started
 
-- Access the app via your mobile browser.
-- Register or log in to your account.
-- Explore features for food management.
+1. Install dependencies:
 
-## Technologies
+```bash
+npm install
+```
 
-- React
-- Node.js
-- Express
-- MongoDB
+2. Run development server:
 
-## Contributing
+```bash
+npm run dev
+```
 
-1. Fork the repository
-2. Create a new branch
-3. Submit a pull request
+3. Open in browser:
+
+```bash
+http://localhost:3000
+```
+
+## API
+
+- `POST /api/analyze`
+  - Accepts multipart form data with:
+    - `foodName`
+    - `image` (optional, ignored for analysis)
+  - Returns food nutrition values and recommendation text.
+
+## Deployment
+
+This app is ready to deploy on Vercel.
 
 ## License
 
-This project is licensed under the MIT License.
-
-## Contact
-
-For support, contact [your-email@example.com](mailto:your-email@example.com).
+MIT
