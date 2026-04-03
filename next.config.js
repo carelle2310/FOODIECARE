@@ -6,6 +6,9 @@ const nextConfig = {
     config.externals = [...(config.externals ?? []), { canvas: "canvas" }];
     return config;
   },
+  turbopack: {
+    // Turbopack configuration for Next.js 16+ (uses Turbopack by default)
+  },
 };
 
 module.exports = nextConfig;

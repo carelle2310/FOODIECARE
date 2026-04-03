@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 const navLinks = [
   { href: "/", label: "Home" },
@@ -11,6 +12,21 @@ const navLinks = [
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient();
+    supabase.auth.getUser().then(({ data }) => {
+      const email = data.user?.email ?? "";
+      setUserEmail(email);
+    });
+  }, []);
+
+  const handleSignOut = async () => {
+    const supabase = createSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    setUserEmail("");
+  };
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/80 shadow-sm backdrop-blur-xl">
@@ -38,12 +54,30 @@ export default function Navbar() {
                 {item.label}
               </Link>
             ))}
-            <Link
-              href="/#analyze"
-              className="ml-1 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition duration-200 hover:bg-emerald-600"
-            >
-              Get Started
-            </Link>
+            {userEmail ? (
+              <>
+                <Link
+                  href="/dashboard"
+                  className="rounded-lg px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+                >
+                  Dashboard
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Sign out
+                </button>
+              </>
+            ) : (
+              <Link
+                href="/auth"
+                className="ml-1 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition duration-200 hover:bg-emerald-600"
+              >
+                Sign in
+              </Link>
+            )}
           </div>
 
           <button
@@ -69,6 +103,35 @@ export default function Navbar() {
                   {item.label}
                 </Link>
               ))}
+              {userEmail ? (
+                <>
+                  <Link
+                    href="/dashboard"
+                    onClick={() => setIsOpen(false)}
+                    className="rounded-lg px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+                  >
+                    Dashboard
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleSignOut();
+                      setIsOpen(false);
+                    }}
+                    className="rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <Link
+                  href="/auth"
+                  onClick={() => setIsOpen(false)}
+                  className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Sign in
+                </Link>
+              )}
             </div>
           </div>
         ) : null}

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import CameraCapture from "./CameraCapture";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 const SUGGESTIONS = [
   "pizza",
@@ -23,58 +24,78 @@ export default function UploadForm() {
 
   // Image state
   const [imageSrc, setImageSrc] = useState(null);
+  const [imageFile, setImageFile] = useState(null);
 
-  // AI state
-  const [isRunningAI, setIsRunningAI] = useState(false);
-  const [aiLabel, setAiLabel] = useState(""); // raw MobileNet label
-  const [confidence, setConfidence] = useState(null); // 0-100
+  // Prediction state
+  const [isPredicting, setIsPredicting] = useState(false);
+  const [predictionResult, setPredictionResult] = useState(null);
 
   // Form state
   const [foodName, setFoodName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
-  /** Run MobileNet on a data-URL image and auto-fill food name + confidence */
-  const runAIPrediction = async (src) => {
-    setIsRunningAI(true);
+  /**
+   * Send image to backend prediction API
+   */
+  const sendToPredictionAPI = async (file) => {
+    setIsPredicting(true);
+    setPredictionResult(null);
     setFoodName("");
-    setConfidence(null);
-    setAiLabel("");
-    try {
-      // Dynamic import keeps TF.js out of the initial bundle
-      const { classifyFood } = await import("../lib/aiRecognition");
+    setError("");
 
-      // Build a browser Image element to feed to MobileNet
-      const img = new window.Image();
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = () => reject(new Error("Image failed to load."));
-        img.src = src;
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const response = await fetch("/api/predict", {
+        method: "POST",
+        body: formData,
       });
 
-      const result = await classifyFood(img);
-      if (result) {
-        setAiLabel(result.rawLabel);
-        setConfidence(result.confidence);
-        if (result.food) setFoodName(result.food);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Prediction failed");
+      }
+
+      if (data.success && data.data) {
+        setPredictionResult(data.data);
+        const predictedFood = String(data.data.food || "");
+        const isUnknown =
+          predictedFood.trim().toLowerCase() === "unknown food" ||
+          predictedFood.trim().toLowerCase() === "unknown_food";
+
+        if (isUnknown) {
+          setFoodName("");
+          setError(
+            "AI could not confidently detect this food. Please type the food name manually.",
+          );
+        } else {
+          setFoodName(predictedFood);
+        }
       }
     } catch (err) {
-      // AI inference failing is non-fatal — user can still type the food name
-      console.warn("[FoodieCare] AI recognition failed:", err.message);
+      console.warn("[FoodieCare] Prediction failed:", err.message);
+      setError(`Prediction error: ${err.message}`);
     } finally {
-      setIsRunningAI(false);
+      setIsPredicting(false);
     }
   };
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
     setError("");
+    setImageFile(file);
+
     const reader = new FileReader();
     reader.onload = (e) => {
       const src = e.target.result;
       setImageSrc(src);
-      runAIPrediction(src);
+      // Send to backend API
+      sendToPredictionAPI(file);
     };
     reader.readAsDataURL(file);
   };
@@ -82,14 +103,29 @@ export default function UploadForm() {
   const handleCameraCapture = (dataUrl) => {
     setError("");
     setImageSrc(dataUrl);
-    runAIPrediction(dataUrl);
+
+    // Convert data URL to File
+    fetch(dataUrl)
+      .then((res) => res.blob())
+      .then((blob) => {
+        const file = new File([blob], "camera-capture.png", {
+          type: "image/png",
+        });
+        setImageFile(file);
+        sendToPredictionAPI(file);
+      })
+      .catch((err) => {
+        console.error("Camera capture conversion failed:", err);
+        setError("Failed to process camera image");
+      });
   };
 
   const clearImage = () => {
     setImageSrc(null);
+    setImageFile(null);
     setFoodName("");
-    setConfidence(null);
-    setAiLabel("");
+    setPredictionResult(null);
+    setError("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -99,7 +135,18 @@ export default function UploadForm() {
 
     if (!foodName.trim()) {
       setError(
-        "Please enter a food name — or wait for the AI detection to finish.",
+        "Please enter a food name — or wait for the prediction to finish.",
+      );
+      return;
+    }
+
+    const normalizedFoodName = foodName.trim().toLowerCase();
+    if (
+      normalizedFoodName === "unknown food" ||
+      normalizedFoodName === "unknown_food"
+    ) {
+      setError(
+        "Detection is uncertain. Please replace 'Unknown food' with a specific food name.",
       );
       return;
     }
@@ -108,8 +155,14 @@ export default function UploadForm() {
     try {
       const formData = new FormData();
       formData.append("foodName", foodName.trim());
-      if (confidence !== null)
-        formData.append("confidence", String(confidence));
+
+      if (predictionResult) {
+        formData.append("confidence", String(predictionResult.confidence));
+        formData.append(
+          "nutrition",
+          JSON.stringify(predictionResult.nutrition),
+        );
+      }
 
       const response = await fetch("/api/analyze", {
         method: "POST",
@@ -119,11 +172,35 @@ export default function UploadForm() {
 
       if (!response.ok) {
         const msg = data?.error || "Analysis failed.";
-        const hint = data?.supportedFoods?.length
-          ? ` Try: ${data.supportedFoods.join(", ")}.`
-          : "";
-        setError(msg + hint);
+        setError(msg);
         return;
+      }
+
+      // Fire-and-forget meal logging if user is signed in
+      try {
+        const supabase = createSupabaseBrowserClient();
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData.user) {
+          void fetch("/api/meals", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              foodName: data.food,
+              nutrition: {
+                calories: data.calories,
+                protein: data.protein,
+                carbs: data.carbs,
+                fat: data.fat,
+              },
+              goal: null,
+              metadata: {
+                confidence: predictionResult?.confidence ?? null,
+              },
+            }),
+          });
+        }
+      } catch (err) {
+        console.warn("Failed to log meal", err);
       }
 
       router.push(`/result?data=${encodeURIComponent(JSON.stringify(data))}`);
@@ -217,8 +294,8 @@ export default function UploadForm() {
           </div>
         ) : null}
 
-        {/* AI processing indicator */}
-        {isRunningAI ? (
+        {/* AI prediction processing indicator */}
+        {isPredicting ? (
           <div className="flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3">
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
             <div>
@@ -226,26 +303,88 @@ export default function UploadForm() {
                 AI is analyzing your food...
               </p>
               <p className="text-xs text-blue-500">
-                Loading MobileNet model — first run may take 10–15 s
+                Running food detection model
               </p>
             </div>
           </div>
         ) : null}
 
-        {/* AI detection result badge */}
-        {!isRunningAI && aiLabel ? (
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
-                AI Detected
-              </p>
-              <p className="mt-0.5 text-sm text-slate-700">{aiLabel}</p>
-            </div>
-            {confidence !== null ? (
+        {/* Prediction result badge */}
+        {!isPredicting && predictionResult ? (
+          <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
+                  AI Predicted
+                </p>
+                <p className="mt-0.5 text-lg font-bold text-slate-900">
+                  {predictionResult.food}
+                </p>
+              </div>
               <span className="shrink-0 rounded-full bg-emerald-500 px-3 py-1 text-xs font-bold text-white">
-                {confidence}% confidence
+                {(predictionResult.confidence * 100).toFixed(1)}%
               </span>
+            </div>
+
+            {/* Top predictions */}
+            {predictionResult.topPredictions &&
+            predictionResult.topPredictions.length > 1 ? (
+              <div className="space-y-2 border-t border-emerald-200 pt-3">
+                <p className="text-xs font-semibold text-emerald-600">
+                  Other possibilities:
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {predictionResult.topPredictions
+                    .slice(1, 3)
+                    .map((pred, idx) => (
+                      <span
+                        key={idx}
+                        className="rounded-full bg-emerald-100 px-2 py-1 text-xs text-emerald-700"
+                      >
+                        {pred.label} ({(pred.confidence * 100).toFixed(0)}%)
+                      </span>
+                    ))}
+                </div>
+              </div>
             ) : null}
+          </div>
+        ) : null}
+
+        {/* Nutrition preview */}
+        {predictionResult?.nutrition ? (
+          <div className="grid grid-cols-2 gap-3 rounded-xl border border-purple-200 bg-purple-50 p-4">
+            <div className="text-center">
+              <p className="text-xs font-semibold uppercase text-purple-600">
+                Calories
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">
+                {Math.round(predictionResult.nutrition.calories || 0)}
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-xs font-semibold uppercase text-purple-600">
+                Protein
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">
+                {(predictionResult.nutrition.protein || 0).toFixed(1)}g
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-xs font-semibold uppercase text-purple-600">
+                Carbs
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">
+                {(predictionResult.nutrition.carbs || 0).toFixed(1)}g
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-xs font-semibold uppercase text-purple-600">
+                Fat
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">
+                {(predictionResult.nutrition.fat || 0).toFixed(1)}g
+              </p>
+            </div>
           </div>
         ) : null}
 
@@ -257,7 +396,7 @@ export default function UploadForm() {
               className="flex items-center gap-2 text-sm font-medium text-slate-700"
             >
               Food name
-              {!isRunningAI && foodName ? (
+              {!isPredicting && predictionResult && foodName ? (
                 <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
                   auto-filled by AI
                 </span>
@@ -295,9 +434,7 @@ export default function UploadForm() {
           {/* Error card */}
           {error ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-              <p className="text-sm font-semibold text-amber-800">
-                Food not recognized.
-              </p>
+              <p className="text-sm font-semibold text-amber-800">Error</p>
               <p className="mt-0.5 text-xs text-amber-700">{error}</p>
             </div>
           ) : null}
@@ -305,7 +442,7 @@ export default function UploadForm() {
           {/* Submit button */}
           <button
             type="submit"
-            disabled={isLoading || isRunningAI}
+            disabled={isLoading || isPredicting}
             className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg transition duration-200 hover:scale-[1.01] hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isLoading ? (
@@ -313,7 +450,7 @@ export default function UploadForm() {
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                 Analyzing nutrition...
               </>
-            ) : isRunningAI ? (
+            ) : isPredicting ? (
               "AI processing — please wait..."
             ) : (
               "Analyze Nutrition"

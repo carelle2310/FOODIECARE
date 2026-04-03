@@ -8,3 +8,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+/data
+/.venv
+/.venv311
+
+# Large local artifacts (do not commit)
+/food41.zip
+/tmp_food_tf/
+/tmp_food_savedmodel/
+/tsconfig.tsbuildinfo
