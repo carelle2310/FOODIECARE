@@ -17,3 +17,9 @@ pnpm-debug.log*
 /tmp_food_tf/
 /tmp_food_savedmodel/
 /tsconfig.tsbuildinfo
+
+# Visual Studio / workspace metadata
+/.vs/
+*.VC.db
+*.opendb
+*.suo
