@@ -9,21 +9,57 @@ interface ImageTensor {
   height: number;
 }
 
+async function readAndValidateMetadata(buffer: Buffer): Promise<void> {
+  if (!buffer || buffer.length === 0) {
+    throw new Error("Empty buffer");
+  }
+
+  const metadata = await sharp(buffer).metadata();
+
+  if (!metadata.width || !metadata.height) {
+    throw new Error("Invalid image dimensions");
+  }
+
+  if (metadata.width < 50 || metadata.height < 50) {
+    throw new Error("Image too small (minimum 50x50 pixels)");
+  }
+}
+
 /**
  * Fast preprocessing: single sharp pipeline to resize and extract raw RGB.
  */
 export async function preprocessImage(buffer: Buffer): Promise<ImageTensor> {
   try {
+    await readAndValidateMetadata(buffer);
+
     const raw = await sharp(buffer)
-      .resize(TARGET_SIZE, TARGET_SIZE, { fit: "cover", position: "centre" })
+      .resize(TARGET_SIZE, TARGET_SIZE, {
+        fit: "cover",
+        position: "centre",
+        fastShrinkOnLoad: true,
+      })
       .removeAlpha()
-      .toColorspace("srgb")
       .raw()
       .toBuffer();
 
+    const expectedChannels = TARGET_SIZE * TARGET_SIZE;
     const tensor = new Float32Array(TARGET_SIZE * TARGET_SIZE * 3);
-    for (let i = 0; i < raw.length; i++) {
-      tensor[i] = raw[i];
+
+    if (raw.length === expectedChannels * 3) {
+      for (let i = 0; i < raw.length; i++) {
+        tensor[i] = raw[i];
+      }
+    } else if (raw.length === expectedChannels) {
+      // Expand grayscale images into RGB channels.
+      for (let i = 0; i < expectedChannels; i++) {
+        const value = raw[i];
+        const base = i * 3;
+        tensor[base] = value;
+        tensor[base + 1] = value;
+        tensor[base + 2] = value;
+      }
+    } else {
+      throw new Error(`Unexpected image channel layout: ${raw.length} bytes`);
     }
 
     return {
@@ -33,48 +69,15 @@ export async function preprocessImage(buffer: Buffer): Promise<ImageTensor> {
       height: TARGET_SIZE,
     };
   } catch (error) {
-    // Fallback to a more permissive pipeline if colorspace conversion fails.
-    try {
-      const png = await sharp(buffer)
-        .resize(TARGET_SIZE, TARGET_SIZE, { fit: "cover", position: "centre" })
-        .toFormat("png")
-        .toBuffer();
-
-      const raw = await sharp(png).raw().toBuffer();
-      const tensor = new Float32Array(TARGET_SIZE * TARGET_SIZE * 3);
-      for (let i = 0; i < raw.length; i++) {
-        tensor[i] = raw[i];
-      }
-
-      return {
-        data: tensor,
-        shape: [TARGET_SIZE, TARGET_SIZE, 3],
-        width: TARGET_SIZE,
-        height: TARGET_SIZE,
-      };
-    } catch (fallbackError) {
-      throw new Error(
-        `Image preprocessing failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
-      );
-    }
+    throw new Error(
+      `Image preprocessing failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
 export async function validateImage(buffer: Buffer): Promise<boolean> {
   try {
-    if (!buffer || buffer.length === 0) {
-      throw new Error("Empty buffer");
-    }
-
-    const metadata = await sharp(buffer).metadata();
-
-    if (!metadata.width || !metadata.height) {
-      throw new Error("Invalid image dimensions");
-    }
-
-    if (metadata.width < 50 || metadata.height < 50) {
-      throw new Error("Image too small (minimum 50x50 pixels)");
-    }
+    await readAndValidateMetadata(buffer);
 
     return true;
   } catch (error) {

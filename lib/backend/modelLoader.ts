@@ -12,6 +12,22 @@ type LoadedFoodModel = tf.GraphModel | tf.LayersModel;
 let cachedModel: LoadedFoodModel | null = null;
 let modelLoaded = false;
 let backendReady = false;
+let modelLoadingPromise: Promise<LoadedFoodModel> | null = null;
+let tfBackendInitPromise: Promise<void> | null = null;
+
+const globalModelState = globalThis as typeof globalThis & {
+  __foodicareModel?: LoadedFoodModel;
+  __foodicareModelLoaded?: boolean;
+  __foodicareBackendReady?: boolean;
+  __foodicareModelLoadingPromise?: Promise<LoadedFoodModel>;
+};
+
+if (globalModelState.__foodicareModel) {
+  cachedModel = globalModelState.__foodicareModel;
+  modelLoaded = globalModelState.__foodicareModelLoaded ?? true;
+  backendReady = globalModelState.__foodicareBackendReady ?? false;
+  modelLoadingPromise = globalModelState.__foodicareModelLoadingPromise ?? null;
+}
 
 const modelPaths = {
   tfjs: path.join(
@@ -24,30 +40,51 @@ const modelPaths = {
 
 const remoteModelUrl = process.env.FOOD101_MODEL_URL;
 
+async function initializeBackendOnce(): Promise<void> {
+  if (tfBackendInitPromise) {
+    return tfBackendInitPromise;
+  }
+
+  tfBackendInitPromise = (async () => {
+    try {
+      // Try native backend once at startup (if installed in this environment).
+      // @ts-ignore Optional dependency; may be absent in some environments.
+      await import(/* turbopackIgnore: true */ "@tensorflow/tfjs-node");
+      await tf.setBackend("tensorflow");
+      await tf.ready();
+      console.log("[tf] backend initialized: tensorflow (tfjs-node)");
+      return;
+    } catch (error) {
+      // Fallback for environments where tfjs-node cannot be installed.
+      console.warn(
+        "[tf] tfjs-node unavailable; falling back to non-native backend",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    const currentBackend = tf.getBackend();
+    if (currentBackend) {
+      await tf.setBackend(currentBackend);
+      await tf.ready();
+      console.log(`[tf] backend initialized: ${tf.getBackend()} (existing)`);
+      return;
+    }
+
+    await tf.setBackend("cpu");
+    await tf.ready();
+    console.log("[tf] backend initialized: cpu (fallback)");
+  })();
+
+  return tfBackendInitPromise;
+}
+
 async function ensureTensorflowBackend(): Promise<void> {
   if (backendReady) return;
 
-  const preferNative = process.env.USE_TFJS_NODE === "1";
-
-  if (preferNative) {
-    try {
-      // @ts-expect-error Optional native backend; types missing when package isn't installed
-      await import(/* turbopackIgnore: true */ "@tensorflow/tfjs-node");
-      await tf.setBackend("tensorflow");
-      backendReady = true;
-      console.log("Using tfjs-node (TensorFlow) backend");
-      return;
-    } catch (err) {
-      console.warn(
-        "tfjs-node backend not available, falling back to default",
-        err,
-      );
-    }
-  }
-
-  // Ensure a backend is ready (cpu/js). This path is slower but works everywhere.
-  await tf.setBackend(tf.getBackend());
+  await initializeBackendOnce();
+  console.log(`[tf] active backend: ${tf.getBackend()}`);
   backendReady = true;
+  globalModelState.__foodicareBackendReady = true;
 }
 
 function getModelSource(): { source: string; isRemote: boolean } {
@@ -228,48 +265,56 @@ async function predictRaw(
   return outputTensor as tf.Tensor2D;
 }
 
-function extractTopK(
-  probabilities: number[],
-  k: number,
-): Array<{ classId: number; score: number }> {
-  return probabilities
-    .map((score, classId) => ({ classId, score }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k);
-}
-
 /**
  * Load model with caching - returns cached model if already loaded.
  */
 export async function loadModel(): Promise<LoadedFoodModel> {
-  try {
-    if (cachedModel && modelLoaded) {
-      console.log("Using cached Food-101 model");
-      return cachedModel;
-    }
-
-    console.log("Loading Food-101 model");
-    await ensureTensorflowBackend();
-    cachedModel = await loadFoodModel();
-    modelLoaded = true;
-
-    // Warm up once to trigger graph compilation and reduce first-request latency.
-    try {
-      const warmup = tf.zeros([1, 3, 224, 224]);
-      const output = await predictRaw(cachedModel, warmup as tf.Tensor4D);
-      output.dispose();
-      warmup.dispose();
-      console.log("Model warm-up completed");
-    } catch (warmErr) {
-      console.warn("Model warm-up skipped", warmErr);
-    }
-
+  if (cachedModel && modelLoaded) {
     return cachedModel;
-  } catch (error) {
-    throw new Error(
-      `Model loading failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-    );
   }
+
+  if (globalModelState.__foodicareModel && globalModelState.__foodicareModelLoaded) {
+    cachedModel = globalModelState.__foodicareModel;
+    modelLoaded = true;
+    return cachedModel;
+  }
+
+  if (modelLoadingPromise) {
+    return modelLoadingPromise;
+  }
+
+  modelLoadingPromise = (async () => {
+    try {
+      await ensureTensorflowBackend();
+      cachedModel = await loadFoodModel();
+      modelLoaded = true;
+      globalModelState.__foodicareModel = cachedModel;
+      globalModelState.__foodicareModelLoaded = true;
+      globalModelState.__foodicareBackendReady = backendReady;
+
+      // Warm up once to trigger graph compilation and reduce first-request latency.
+      try {
+        const warmup = tf.zeros([1, 3, 224, 224]);
+        const output = await predictRaw(cachedModel, warmup as tf.Tensor4D);
+        output.dispose();
+        warmup.dispose();
+      } catch {
+        // Best effort only.
+      }
+
+      return cachedModel;
+    } catch (error) {
+      throw new Error(
+        `Model loading failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    } finally {
+      modelLoadingPromise = null;
+      globalModelState.__foodicareModelLoadingPromise = undefined;
+    }
+  })();
+
+  globalModelState.__foodicareModelLoadingPromise = modelLoadingPromise;
+  return modelLoadingPromise;
 }
 
 /**
@@ -279,7 +324,6 @@ export async function runInference(
   model: LoadedFoodModel,
   imageTensor: tf.Tensor,
 ): Promise<{
-  predictions: number[];
   topK: Array<{ classId: number; score: number }>;
 }> {
   try {
@@ -288,17 +332,22 @@ export async function runInference(
 
     const rawOutput = await predictRaw(model, vitInput);
     const probabilitiesTensor = toProbabilities(rawOutput);
-    const predArray = Array.from(
-      (await probabilitiesTensor.data()) as Float32Array,
-    );
+    const { values, indices } = tf.topk(probabilitiesTensor, 3, true);
+    const [topScores, topIndices] = await Promise.all([
+      values.data(),
+      indices.data(),
+    ]);
 
-    const topK = extractTopK(predArray, 5);
-
-    console.log("Food-101 predictions (topK):", topK);
+    const topK = Array.from(topScores).map((score, idx) => ({
+      classId: Number(topIndices[idx]),
+      score: Number(score),
+    }));
 
     if (probabilitiesTensor !== rawOutput) {
       rawOutput.dispose();
     }
+    values.dispose();
+    indices.dispose();
     probabilitiesTensor.dispose();
 
     if (batched !== imageTensor) {
@@ -306,10 +355,7 @@ export async function runInference(
     }
     vitInput.dispose();
 
-    return {
-      predictions: predArray,
-      topK,
-    };
+    return { topK };
   } catch (error) {
     console.error("Inference error:", error);
     throw new Error(
@@ -321,39 +367,6 @@ export async function runInference(
 /**
  * Get top-k predictions.
  */
-function getTopKPredictions(
-  predictions: number[],
-  k: number,
-): Array<{ classId: number; score: number }> {
-  return predictions
-    .map((score, classId) => ({ classId, score }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k);
-}
-
-/**
- * Get prediction for a single class.
- */
-export function getTopPrediction(predictions: number[]): {
-  classId: number;
-  confidence: number;
-} {
-  let maxConfidence = 0;
-  let maxIndex = 0;
-
-  for (let i = 0; i < predictions.length; i++) {
-    if (predictions[i] > maxConfidence) {
-      maxConfidence = predictions[i];
-      maxIndex = i;
-    }
-  }
-
-  return {
-    classId: maxIndex,
-    confidence: Math.min(maxConfidence, 1.0),
-  };
-}
-
 /**
  * Clear cached model.
  */
@@ -363,5 +376,9 @@ export function clearModelCache(): void {
   }
   cachedModel = null;
   modelLoaded = false;
+  modelLoadingPromise = null;
+  globalModelState.__foodicareModel = undefined;
+  globalModelState.__foodicareModelLoaded = false;
+  globalModelState.__foodicareModelLoadingPromise = undefined;
   tf.disposeVariables();
 }

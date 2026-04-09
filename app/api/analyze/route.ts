@@ -152,28 +152,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    // Run independent I/O concurrently.
+    const nutritionDataPromise = loadNutritionData();
+    const goalPromise = fetchUserGoal(request.headers.get("cookie"));
+
     // Load nutrition data from CSV
-    const nutritionData = await loadNutritionData();
+    const nutritionData = await nutritionDataPromise;
 
     // Normalize food name for lookup
     const normalizedFoodName = normalizeLabelForNutrition(foodName);
-    console.log("Analyze lookup:", {
-      original: foodName,
-      normalized: normalizedFoodName,
-    });
-
     // Find nutrition data
     const nutrition =
       getNutritionWithFuzzy(normalizedFoodName, nutritionData) ||
       getDefaultNutrition();
-
-    console.log("Nutrition result:", {
-      found: nutrition.calories > 0,
-      calories: nutrition.calories,
-      protein: nutrition.protein,
-      carbs: nutrition.carbs,
-      fat: nutrition.fat,
-    });
 
     if (nutrition.calories === 0) {
       return NextResponse.json(
@@ -185,7 +176,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const goal = await fetchUserGoal(request.headers.get("cookie"));
+    const goal = await goalPromise;
     const rec = buildRecommendations(nutrition, goal);
 
     return NextResponse.json({

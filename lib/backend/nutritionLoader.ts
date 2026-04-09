@@ -8,6 +8,36 @@ import { NutritionData, NutritionRecord, RawNutritionCSV } from "./types";
  */
 
 let cachedNutritionData: NutritionRecord | null = null;
+let cachedNutritionKeys: string[] | null = null;
+let inFlightNutritionLoad: Promise<NutritionRecord> | null = null;
+const fuzzyMatchCache = new Map<string, NutritionData | null>();
+
+const globalNutritionState = globalThis as typeof globalThis & {
+  __foodicareNutritionData?: NutritionRecord;
+  __foodicareNutritionKeys?: string[];
+  __foodicareNutritionLoadPromise?: Promise<NutritionRecord>;
+  __foodicareFuzzyMatchCache?: Map<string, NutritionData | null>;
+};
+
+if (globalNutritionState.__foodicareNutritionData) {
+  cachedNutritionData = globalNutritionState.__foodicareNutritionData;
+}
+
+if (globalNutritionState.__foodicareNutritionKeys) {
+  cachedNutritionKeys = globalNutritionState.__foodicareNutritionKeys;
+}
+
+if (globalNutritionState.__foodicareNutritionLoadPromise) {
+  inFlightNutritionLoad = globalNutritionState.__foodicareNutritionLoadPromise;
+}
+
+if (globalNutritionState.__foodicareFuzzyMatchCache) {
+  for (const [k, v] of globalNutritionState.__foodicareFuzzyMatchCache) {
+    fuzzyMatchCache.set(k, v);
+  }
+} else {
+  globalNutritionState.__foodicareFuzzyMatchCache = fuzzyMatchCache;
+}
 
 const NUTRITION_CSV_PATH = path.join(process.cwd(), "nutrition.csv");
 
@@ -29,74 +59,92 @@ function toNumber(value: string): number {
  * Parse CSV and load nutrition data
  */
 export async function loadNutritionData(): Promise<NutritionRecord> {
-  try {
-    // Return cached data if available
-    if (cachedNutritionData) {
-      console.log("Using cached nutrition data");
-      return cachedNutritionData;
-    }
-
-    if (!fs.existsSync(NUTRITION_CSV_PATH)) {
-      throw new Error(`Nutrition CSV not found at ${NUTRITION_CSV_PATH}`);
-    }
-
-    const csvContent = fs.readFileSync(NUTRITION_CSV_PATH, "utf-8");
-    const rows = parse(csvContent, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    }) as Array<Record<string, string>>;
-
-    const bestRowByLabel = new Map<
-      string,
-      { row: Record<string, string>; score: number }
-    >();
-
-    for (const row of rows) {
-      const labelRaw = getField(row, ["label", "Label", "food", "Food"]);
-      const normalizedLabel = normalizeFoodName(labelRaw);
-
-      if (!normalizedLabel) {
-        continue;
-      }
-
-      const weight = toNumber(getField(row, ["weight", "Weight", "serving_size", "Serving Size"]));
-      // Prefer entries closest to 100g for consistency.
-      const score = weight > 0 ? Math.abs(weight - 100) : Number.POSITIVE_INFINITY;
-
-      const existing = bestRowByLabel.get(normalizedLabel);
-      if (!existing || score < existing.score) {
-        bestRowByLabel.set(normalizedLabel, { row, score });
-      }
-    }
-
-    const nutritionData: NutritionRecord = {};
-    for (const [label, { row }] of bestRowByLabel.entries()) {
-      const weight = getField(row, ["weight", "Weight", "serving_size", "Serving Size"]);
-
-      nutritionData[label] = {
-        calories: toNumber(getField(row, ["calories", "Calories"])),
-        protein: toNumber(getField(row, ["protein", "Protein"])),
-        carbs: toNumber(getField(row, ["carbohydrates", "carbs", "Carbohydrates", "Carbs"])),
-        fat: toNumber(getField(row, ["fats", "fat", "Fats", "Fat"])),
-        fiber: toNumber(getField(row, ["fiber", "Fiber"])),
-        sugar: toNumber(getField(row, ["sugars", "sugar", "Sugars", "Sugar"])),
-        sodium: toNumber(getField(row, ["sodium", "Sodium"])),
-        servingSize: weight ? `${weight} g` : undefined,
-      };
-    }
-
-    cachedNutritionData = nutritionData;
-    console.log(
-      `Loaded nutrition data for ${Object.keys(nutritionData).length} foods`,
-    );
-
-    return nutritionData;
-  } catch (error) {
-    throw new Error(
-      `Failed to load nutrition data: ${error instanceof Error ? error.message : "Unknown error"}`,
-    );
+  // Return cached data if available
+  if (cachedNutritionData) {
+    return cachedNutritionData;
   }
+
+  if (globalNutritionState.__foodicareNutritionData) {
+    cachedNutritionData = globalNutritionState.__foodicareNutritionData;
+    cachedNutritionKeys = globalNutritionState.__foodicareNutritionKeys ?? null;
+    return cachedNutritionData;
+  }
+
+  if (inFlightNutritionLoad) {
+    return inFlightNutritionLoad;
+  }
+
+  inFlightNutritionLoad = (async () => {
+    try {
+      if (!fs.existsSync(NUTRITION_CSV_PATH)) {
+        throw new Error(`Nutrition CSV not found at ${NUTRITION_CSV_PATH}`);
+      }
+
+      const csvContent = fs.readFileSync(NUTRITION_CSV_PATH, "utf-8");
+      const rows = parse(csvContent, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+      }) as Array<Record<string, string>>;
+
+      const bestRowByLabel = new Map<
+        string,
+        { row: Record<string, string>; score: number }
+      >();
+
+      for (const row of rows) {
+        const labelRaw = getField(row, ["label", "Label", "food", "Food"]);
+        const normalizedLabel = normalizeFoodName(labelRaw);
+
+        if (!normalizedLabel) {
+          continue;
+        }
+
+        const weight = toNumber(getField(row, ["weight", "Weight", "serving_size", "Serving Size"]));
+        // Prefer entries closest to 100g for consistency.
+        const score = weight > 0 ? Math.abs(weight - 100) : Number.POSITIVE_INFINITY;
+
+        const existing = bestRowByLabel.get(normalizedLabel);
+        if (!existing || score < existing.score) {
+          bestRowByLabel.set(normalizedLabel, { row, score });
+        }
+      }
+
+      const nutritionData: NutritionRecord = {};
+      for (const [label, { row }] of bestRowByLabel.entries()) {
+        const weight = getField(row, ["weight", "Weight", "serving_size", "Serving Size"]);
+
+        nutritionData[label] = {
+          calories: toNumber(getField(row, ["calories", "Calories"])),
+          protein: toNumber(getField(row, ["protein", "Protein"])),
+          carbs: toNumber(getField(row, ["carbohydrates", "carbs", "Carbohydrates", "Carbs"])),
+          fat: toNumber(getField(row, ["fats", "fat", "Fats", "Fat"])),
+          fiber: toNumber(getField(row, ["fiber", "Fiber"])),
+          sugar: toNumber(getField(row, ["sugars", "sugar", "Sugars", "Sugar"])),
+          sodium: toNumber(getField(row, ["sodium", "Sodium"])),
+          servingSize: weight ? `${weight} g` : undefined,
+        };
+      }
+
+      cachedNutritionData = nutritionData;
+      cachedNutritionKeys = Object.keys(nutritionData);
+      fuzzyMatchCache.clear();
+      globalNutritionState.__foodicareNutritionData = nutritionData;
+      globalNutritionState.__foodicareNutritionKeys = cachedNutritionKeys;
+
+      return nutritionData;
+    } catch (error) {
+      throw new Error(
+        `Failed to load nutrition data: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    } finally {
+      inFlightNutritionLoad = null;
+      globalNutritionState.__foodicareNutritionLoadPromise = undefined;
+    }
+  })();
+
+  globalNutritionState.__foodicareNutritionLoadPromise = inFlightNutritionLoad;
+  return inFlightNutritionLoad;
 }
 
 /**
@@ -136,13 +184,20 @@ export function getNutritionWithFuzzy(
 ): NutritionData | null {
   const normalized = normalizeFoodName(foodName);
 
+  const cachedMatch = fuzzyMatchCache.get(normalized);
+  if (cachedMatch !== undefined) {
+    return cachedMatch;
+  }
+
   // Try exact match first
   if (nutritionData[normalized]) {
-    return nutritionData[normalized];
+    const result = nutritionData[normalized];
+    fuzzyMatchCache.set(normalized, result);
+    return result;
   }
 
   // Try partial match
-  const keys = Object.keys(nutritionData);
+  const keys = cachedNutritionKeys ?? Object.keys(nutritionData);
   const partial = keys.find(
     (key) =>
       key.includes(normalized) ||
@@ -150,7 +205,9 @@ export function getNutritionWithFuzzy(
       calculateSimilarity(key, normalized) > 0.6,
   );
 
-  return partial ? nutritionData[partial] : null;
+  const result = partial ? nutritionData[partial] : null;
+  fuzzyMatchCache.set(normalized, result);
+  return result;
 }
 
 /**
@@ -213,4 +270,10 @@ export function getDefaultNutrition(): NutritionData {
  */
 export function clearNutritionCache(): void {
   cachedNutritionData = null;
+  cachedNutritionKeys = null;
+  inFlightNutritionLoad = null;
+  fuzzyMatchCache.clear();
+  globalNutritionState.__foodicareNutritionData = undefined;
+  globalNutritionState.__foodicareNutritionKeys = undefined;
+  globalNutritionState.__foodicareNutritionLoadPromise = undefined;
 }
