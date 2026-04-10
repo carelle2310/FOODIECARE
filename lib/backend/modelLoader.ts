@@ -92,9 +92,7 @@ function getModelSource(): { source: string; isRemote: boolean } {
     return { source: remoteModelUrl.trim(), isRemote: true };
   }
 
-  if (
-    /* turbopackIgnore: true */ fs.existsSync(modelPaths.tfjs)
-  ) {
+  if (/* turbopackIgnore: true */ fs.existsSync(modelPaths.tfjs)) {
     return { source: `file://${modelPaths.tfjs}`, isRemote: false };
   }
 
@@ -275,7 +273,10 @@ export async function loadModel(): Promise<LoadedFoodModel> {
     return cachedModel;
   }
 
-  if (globalModelState.__foodicareModel && globalModelState.__foodicareModelLoaded) {
+  if (
+    globalModelState.__foodicareModel &&
+    globalModelState.__foodicareModelLoaded
+  ) {
     cachedModel = globalModelState.__foodicareModel;
     modelLoaded = true;
     return cachedModel;
