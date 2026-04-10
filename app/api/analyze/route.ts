@@ -28,6 +28,37 @@ function formatFoodName(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+function buildFoodSuggestions(
+  query: string,
+  nutritionData: Record<string, NutritionData>,
+): string[] {
+  const normalized = normalizeLabelForNutrition(query);
+  const keys = Object.keys(nutritionData);
+
+  const matches = keys
+    .filter(
+      (k) =>
+        k.includes(normalized) ||
+        normalized.includes(k) ||
+        k.startsWith(normalized.slice(0, 3)),
+    )
+    .slice(0, 8)
+    .map((k) => formatFoodName(k.replace(/_/g, " ")));
+
+  if (matches.length > 0) {
+    return matches;
+  }
+
+  return [
+    "Pizza",
+    "Burger",
+    "Sushi",
+    "Fried Rice",
+    "Grilled Salmon",
+    "Caesar Salad",
+  ];
+}
+
 function buildRecommendations(
   nutrition: NutritionData,
   goal: Goal,
@@ -169,8 +200,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (nutrition.calories === 0) {
       return NextResponse.json(
         {
-          error: "Food not found in database.",
-          supportedFoods: Object.keys(nutritionData).slice(0, 10), // Show first 10 foods
+          error:
+            "We could not match that item to a known food in our nutrition database.",
+          suggestions: buildFoodSuggestions(foodName, nutritionData),
         },
         { status: 404 },
       );

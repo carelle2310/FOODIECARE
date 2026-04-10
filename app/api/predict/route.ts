@@ -119,6 +119,21 @@ function shouldRejectAsNonFood(
   return false;
 }
 
+function isNutritionBackedFoodLabel(
+  label: string,
+  nutritionData: Awaited<ReturnType<typeof loadNutritionData>>,
+): boolean {
+  if (!label || label === "unknown_food" || label.startsWith("class_")) {
+    return false;
+  }
+
+  const normalized = normalizeLabelForNutrition(label);
+  const nutrition =
+    getNutritionWithFuzzy(normalized, nutritionData) || getDefaultNutrition();
+
+  return nutrition.calories > 0;
+}
+
 /**
  * POST /api/predict
  * Handles image upload and returns food prediction with nutrition data
@@ -290,9 +305,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       bestKnownPrediction?.raw.classId ?? topPrediction.classId,
     );
 
-    const finalMappedLabel = rejectAsNonFood
-      ? "unknown_food"
-      : effectivePrediction.label;
+    const isNutritionBacked = isNutritionBackedFoodLabel(
+      effectivePrediction.label,
+      nutritionData,
+    );
+
+    const finalMappedLabel =
+      rejectAsNonFood || !isNutritionBacked
+        ? "unknown_food"
+        : effectivePrediction.label;
 
     // Normalize label for nutrition lookup
     const nutritionLookupStart = process.hrtime.bigint();
@@ -304,10 +325,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     mark("nutritionLookupMs", nutritionLookupStart);
 
     // Get top 3 predictions with labels
-    const topPredictionsForResponse = topPredictions.map((p) => ({
-      label: toDisplayFoodLabel(p.label),
-      confidence: p.confidence,
-    }));
+    const topPredictionsForResponse = topPredictions
+      .filter((p) => isNutritionBackedFoodLabel(p.label, nutritionData))
+      .slice(0, 3)
+      .map((p) => ({
+        label: toDisplayFoodLabel(p.label),
+        confidence: p.confidence,
+      }));
+
+    if (topPredictionsForResponse.length === 0) {
+      topPredictionsForResponse.push({
+        label: "Unknown food",
+        confidence: effectivePrediction.confidence,
+      });
+    }
     // Build response
     const result: PredictionResult = {
       food: toDisplayFoodLabel(finalMappedLabel),
