@@ -1,5 +1,4 @@
 import { createBrowserClient } from "@supabase/ssr";
-// @ts-expect-error types file is local; suppress false unresolved warning in some setups
 import type { Database } from "./types";
 
 /**
