@@ -92,7 +92,9 @@ function getModelSource(): { source: string; isRemote: boolean } {
     return { source: remoteModelUrl.trim(), isRemote: true };
   }
 
-  if (fs.existsSync(modelPaths.tfjs)) {
+  if (
+    /* turbopackIgnore: true */ fs.existsSync(modelPaths.tfjs)
+  ) {
     return { source: `file://${modelPaths.tfjs}`, isRemote: false };
   }
 
