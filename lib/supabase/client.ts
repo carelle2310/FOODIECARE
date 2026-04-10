@@ -6,8 +6,13 @@ import type { Database } from "./types";
  * Uses cookie-backed storage so PKCE code verifiers survive the email magic-link redirect.
  */
 export function createSupabaseBrowserClient() {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    throw new Error("Supabase URL or anon key missing. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+  if (
+    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  ) {
+    throw new Error(
+      "Supabase URL or anon key missing. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+    );
   }
 
   const cookieStore = {
@@ -16,7 +21,16 @@ export function createSupabaseBrowserClient() {
       const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`));
       return match ? decodeURIComponent(match[2]) : undefined;
     },
-    set(name: string, value: string, options: { expires?: number; maxAge?: number; path?: string; sameSite?: "lax" | "strict" | "none" }) {
+    set(
+      name: string,
+      value: string,
+      options: {
+        expires?: number;
+        maxAge?: number;
+        path?: string;
+        sameSite?: "lax" | "strict" | "none";
+      },
+    ) {
       if (typeof document === "undefined") return;
       const parts = [
         `${name}=${encodeURIComponent(value)}`,
@@ -27,7 +41,10 @@ export function createSupabaseBrowserClient() {
       parts.push(`Max-Age=${maxAge}`);
       document.cookie = parts.join("; ");
     },
-    remove(name: string, options: { path?: string; sameSite?: "lax" | "strict" | "none" }) {
+    remove(
+      name: string,
+      options: { path?: string; sameSite?: "lax" | "strict" | "none" },
+    ) {
       if (typeof document === "undefined") return;
       document.cookie = `${name}=; Path=${options?.path ?? "/"}; Max-Age=0; SameSite=${options?.sameSite ?? "lax"}`;
     },
