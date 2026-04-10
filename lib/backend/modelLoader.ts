@@ -29,14 +29,14 @@ if (globalModelState.__foodicareModel) {
   modelLoadingPromise = globalModelState.__foodicareModelLoadingPromise ?? null;
 }
 
-const modelPaths = {
-  tfjs: path.join(
+function getLocalModelPath(): string {
+  return path.join(
     /* turbopackIgnore: true */ process.cwd(),
     "public",
     "models",
     "model.json",
-  ),
-};
+  );
+}
 
 const remoteModelUrl = process.env.FOOD101_MODEL_URL;
 
@@ -92,8 +92,9 @@ function getModelSource(): { source: string; isRemote: boolean } {
     return { source: remoteModelUrl.trim(), isRemote: true };
   }
 
-  if (/* turbopackIgnore: true */ fs.existsSync(modelPaths.tfjs)) {
-    return { source: `file://${modelPaths.tfjs}`, isRemote: false };
+  const tfPath = getLocalModelPath();
+  if (/* turbopackIgnore: true */ fs.existsSync(tfPath)) {
+    return { source: `file://${tfPath}`, isRemote: false };
   }
 
   throw new Error(
