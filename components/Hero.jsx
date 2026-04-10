@@ -38,7 +38,7 @@ export default function Hero() {
 
         <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-3">
           <div className="rounded-xl bg-slate-50 p-4">
-            <p className="text-xl font-bold text-slate-900">7+</p>
+            <p className="text-xl font-bold text-slate-900">100+</p>
             <p className="text-xs text-slate-500">Supported food items</p>
           </div>
           <div className="rounded-xl bg-slate-50 p-4">

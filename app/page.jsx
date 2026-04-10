@@ -65,11 +65,12 @@ export default function HomePage() {
               Built for smart and practical nutrition awareness
             </h3>
             <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-600 sm:text-base">
-              FoodieCare demonstrates an AI-inspired healthcare web product
-              using a simple and explainable flow. It is ideal for a final year
-              BCA project because it combines modern frontend design, API
-              integration, data handling, and user-focused experience in one
-              deployable application.
+              FoodieCare is an AI-powered web app that lets users photograph
+              meals and instantly receive detailed nutritional insights. Built
+              with a responsive frontend, scalable backend, and explainable AI
+              pipeline, it delivers a seamless, production-ready solution that
+              makes advanced nutrition analysis simple and accessible to
+              everyday users.
             </p>
           </section>
         </div>
