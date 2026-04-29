@@ -1,12 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export default function AuthPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    const redirectedError = searchParams.get("error");
+    if (redirectedError) {
+      setStatus(`Sign-in failed: ${redirectedError}`);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const checkSession = async () => {
+      const supabase = createSupabaseBrowserClient();
+      const { data } = await supabase.auth.getSession();
+      if (isActive && data.session) {
+        router.replace("/dashboard");
+      }
+    };
+
+    checkSession();
+
+    return () => {
+      isActive = false;
+    };
+  }, [router]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

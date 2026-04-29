@@ -157,7 +157,7 @@ export async function loadFoodModel(): Promise<LoadedFoodModel> {
   const { source, isRemote } = getModelSource();
 
   if (!isRemote) {
-    const localModel = await loadLocalModel(modelPaths.tfjs);
+    const localModel = await loadLocalModel(getLocalModelPath());
     const modelType =
       typeof (localModel as tf.GraphModel).executeAsync === "function"
         ? "GraphModel"
